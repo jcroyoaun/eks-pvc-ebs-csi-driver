@@ -63,7 +63,7 @@ function cluster_exists() {
 # Functions for setting up persistent storage
 
 download_example_iam_policy() {
-  curl -o example-iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-ebs-csi-driver/v0.9.0/docs/example-iam-policy.json
+  curl -k -o example-iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-ebs-csi-driver/v0.9.0/docs/example-iam-policy.json
 }
 
 create_iam_policy() {
