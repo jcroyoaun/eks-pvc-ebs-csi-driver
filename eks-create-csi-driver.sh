@@ -7,51 +7,60 @@
 # Exit codes: 
 #  150 -> no cluster name passed.
 #  152 -> Unable to get AWS ID.
+#  155 -> Cluster does not exist.
 # 
 
 set -e
 set -u
 set -o pipefail
+
 aws_profile=""
 readonly CLUSTER_NAME_MISSING=150
 readonly AWS_ID_NOT_FOUND=152
+readonly CLUSTER_NOT_EXIST=155
 
-while getopts ":p:" opt; do
-  case ${opt} in
-    p)
-      aws_profile="--profile ${OPTARG}"
-      ;;
-    \?)
-      echo "Usage: ${0} [-p aws_profile] cluster_name"
-      exit 1
-      ;;
-    :)
-      echo "Option -${OPTARG} requires an argument."
-      exit 1
-      ;;
-  esac
-done
+usage() {
+    cat <<USAGE_TEXT
+Usage: ${0} [-h | --help] [-p <aws_profile> | --profile <aws_profile>] cluster_name
+DESCRIPTION
+    This script sets up persistent storage in Amazon EKS using the Amazon
+    Elastic Block Store (Amazon EBS) Container Storage Interface (CSI) driver.
 
-shift $((OPTIND - 1))
+OPTIONS:
+    -h, --help
+        Print this help and exit.
+    -p <aws_profile>, --profile <aws_profile>
+        Specify the AWS profile to use when executing the script. If not provided,
+        the default profile will be used.
+
+ARGUMENTS:
+    cluster_name
+        The name of the Amazon EKS cluster to set up persistent storage for.
+
+USAGE_TEXT
+}
 
 terminate() {
     local -r msg="${1}"
     local -r code="${2:-160}"
-    echo "$0 - Error: ${msg}" >&2
+    echo "${msg}" >&2
     exit "${code}"
 }
 
-if [[ "$#" -ne 1 ]]; then
-    terminate "No Cluster name was passed as command line arguments." "${CLUSTER_NAME_MISSING}"
-    exit 150
-fi
-cluster_name="${1}"
+function cluster_exists() {
+  local cluster_name="${1}"
+  local profile="${2}"
+  local clusters
 
-if ! YOUR_AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text ${aws_profile}); then
-  terminate "Unable to find/load AWS ID" "${AWS_ID_NOT_FOUND}"
-fi
+  clusters=$(aws eks list-clusters --output text ${profile} | tr '\t' '\n')
+  if [[ ${clusters[*]} =~ (^|[[:space:]])"${cluster_name}"($|[[:space:]]) ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
 
-echo "${YOUR_AWS_ACCOUNT_ID}"
+# Functions for setting up persistent storage
 
 download_example_iam_policy() {
   curl -o example-iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-ebs-csi-driver/v0.9.0/docs/example-iam-policy.json
@@ -106,7 +115,59 @@ attach_role_policy() {
     --role-name AmazonEKS_EBS_CSI_DriverRole ${profile}
 }
 
+
+# Process command line options
+
+while getopts ":p:h-:" opt; do
+  case ${opt} in
+    p)
+      aws_profile="--profile ${OPTARG}"
+      ;;
+    h | \?)
+      usage
+      exit 0
+      ;;
+    -)
+      case "${OPTARG}" in
+        help)
+          usage
+          exit 0
+          ;;
+        profile)
+          aws_profile="--profile ${!OPTIND}"
+          OPTIND=$((OPTIND + 1))
+          ;;
+        *)
+          usage
+          exit 1
+          ;;
+      esac
+      ;;
+    :)
+      echo "Option -${OPTARG} requires an argument."
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+if [[ "$#" -ne 1 ]]; then
+    usage
+    terminate "ERROR: No Cluster name was passed as command line arguments." "${CLUSTER_NAME_MISSING}"
+fi
+
+cluster_name="${1}"
+
+if ! cluster_exists "${cluster_name}" "${aws_profile}"; then
+  terminate "ERROR: Cluster '${cluster_name}' does not exist." "${CLUSTER_NOT_EXIST}"
+fi
+
+if ! YOUR_AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text ${aws_profile}); then
+  terminate "Unable to find/load AWS ID" "${AWS_ID_NOT_FOUND}"
+fi
+
 # Call the functions with the aws_profile variable
+
 download_example_iam_policy
 create_iam_policy "${aws_profile}"
 
@@ -115,10 +176,13 @@ if ! oidc_issuer_url=$(get_oidc_issuer_url "${aws_profile}"); then
 fi 
 
 if ! oidc_id=$(echo "$oidc_issuer_url" | sed -e "s/^https:\/\/oidc.eks.${YOUR_AWS_REGION}.amazonaws.com\/id\///"); then
-  terminate "Unable to get OIDC ID from teh OIDC Issuer URL"
+  terminate "Unable to get OIDC ID from the OIDC Issuer URL"
 fi
 
 generate_trust_policy
 create_iam_role "${aws_profile}"
 attach_role_policy "${aws_profile}"
 
+echo "Finished setting up persistent storage in Amazon EKS using EBS Container Storage Interface (CSI) driver..."
+
+exit 0
