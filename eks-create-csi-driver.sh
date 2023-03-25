@@ -15,13 +15,14 @@ set -u
 set -o pipefail
 
 aws_profile=""
+aws_region=""
 readonly CLUSTER_NAME_MISSING=150
 readonly AWS_ID_NOT_FOUND=152
 readonly CLUSTER_NOT_EXIST=155
 
 usage() {
     cat <<USAGE_TEXT
-Usage: ${0} [-h | --help] [-p <aws_profile> | --profile <aws_profile>] cluster_name
+Usage: ${0} [-h | --help] [-p <aws_profile> | --profile <aws_profile>] cluster_name aws_region
 DESCRIPTION
     This script sets up persistent storage in Amazon EKS using the Amazon
     Elastic Block Store (Amazon EBS) Container Storage Interface (CSI) driver.
@@ -36,6 +37,8 @@ OPTIONS:
 ARGUMENTS:
     cluster_name
         The name of the Amazon EKS cluster to set up persistent storage for.
+    aws_region
+        The AWS region in which the Amazon EKS cluster is located.
 
 USAGE_TEXT
 }
@@ -84,12 +87,12 @@ generate_trust_policy() {
     {
       "Effect": "Allow",
       "Principal": {
-        "Federated": "arn:aws:iam::${YOUR_AWS_ACCOUNT_ID}:oidc-provider/oidc.eks.${YOUR_AWS_REGION}.amazonaws.com/id/${oidc_id}"
+        "Federated": "arn:aws:iam::${YOUR_AWS_ACCOUNT_ID}:oidc-provider/oidc.eks.${aws_region}.amazonaws.com/id/${oidc_id}"
       },
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "oidc.eks.${YOUR_AWS_REGION}.amazonaws.com/id/${oidc_id}:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+          "oidc.eks.${aws_region}.amazonaws.com/id/${oidc_id}:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa"
         }
       }
     }
@@ -151,12 +154,13 @@ while getopts ":p:h-:" opt; do
 done
 shift $((OPTIND - 1))
 
-if [[ "$#" -ne 1 ]]; then
+if [[ "$#" -ne 2 ]]; then
     usage
     terminate "ERROR: No Cluster name was passed as command line arguments." "${CLUSTER_NAME_MISSING}"
 fi
 
 cluster_name="${1}"
+aws_region="${2}"
 
 if ! cluster_exists "${cluster_name}" "${aws_profile}"; then
   terminate "ERROR: Cluster '${cluster_name}' does not exist." "${CLUSTER_NOT_EXIST}"
@@ -175,7 +179,7 @@ if ! oidc_issuer_url=$(get_oidc_issuer_url "${aws_profile}"); then
   terminate "No OIDC Issuer URL found"
 fi 
 
-if ! oidc_id=$(echo "$oidc_issuer_url" | sed -e "s/^https:\/\/oidc.eks.${YOUR_AWS_REGION}.amazonaws.com\/id\///"); then
+if ! oidc_id=$(echo "$oidc_issuer_url" | sed -e "s/^https:\/\/oidc.eks.${aws_region}.amazonaws.com\/id\///"); then
   terminate "Unable to get OIDC ID from the OIDC Issuer URL"
 fi
 
